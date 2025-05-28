@@ -1,4 +1,4 @@
-# Utitlity file with functions for handling rotations.
+# Utility file with functions for handling rotations.
 #
 # Authors: Trevor Ablett and Jonathan Kelly
 # University of Toronto Institute for Aerospace Studies
@@ -13,10 +13,16 @@ def angle_normalize(a):
 
 def skew_symmetric(v):
     """Skew symmetric form of a 3x1 vector."""
-    return np.array(
-        [[0, -v[2], v[1]],
-         [v[2], 0, -v[0]],
-         [-v[1], v[0], 0]], dtype=np.float64)
+    # Ensure v is a 1D array with 3 elements
+    v = np.array(v).flatten()
+    if len(v) != 3:
+        raise ValueError("Input vector must have exactly 3 elements")
+    
+    return np.array([
+        [0, -v[2], v[1]],
+        [v[2], 0, -v[0]],
+        [-v[1], v[0], 0]
+    ], dtype=np.float64)
 
 def rpy_jacobian_axis_angle(a):
     """Jacobian of RPY Euler angles with respect to axis-angle vector."""
@@ -44,7 +50,7 @@ def rpy_jacobian_axis_angle(a):
 class Quaternion():
     def __init__(self, w=1., x=0., y=0., z=0., axis_angle=None, euler=None):
         """
-        Allow initialization with explicit quaterion wxyz, axis-angle, or Euler XYZ (RPY) angles.
+        Allow initialization with explicit quaternion wxyz, axis-angle, or Euler XYZ (RPY) angles.
 
         :param w: w (real) of quaternion.
         :param x: x (i) of quaternion.
@@ -94,28 +100,35 @@ class Quaternion():
             self.y = cr * sp * cy + sr * cp * sy
             self.z = cr * cp * sy - sr * sp * cy
 
-            # Rotating frame
-            # self.w = cr * cp * cy - sr * sp * sy
-            # self.x = cr * sp * sy + sr * cp * cy
-            # self.y = cr * sp * cy - sr * cp * sy
-            # self.z = cr * cp * sy + sr * sp * cy
-
     def __repr__(self):
         return "Quaternion (wxyz): [%2.5f, %2.5f, %2.5f, %2.5f]" % (self.w, self.x, self.y, self.z)
 
     def to_axis_angle(self):
-        t = 2*np.arccos(self.w)
-        return np.array(t*np.array([self.x, self.y, self.z])/np.sin(t/2))
+        # Handle the case where w might be slightly > 1 due to numerical errors
+        w_clamped = np.clip(self.w, -1.0, 1.0)
+        t = 2 * np.arccos(w_clamped)
+        
+        if np.abs(np.sin(t/2)) < 1e-6:  # Small angle case
+            return np.zeros(3)
+        else:
+            return t * np.array([self.x, self.y, self.z]) / np.sin(t/2)
 
     def to_mat(self):
-        v = np.array([self.x, self.y, self.z]).reshape(3,1)
-        return (self.w ** 2 - np.dot(v.T, v)) * np.eye(3) + \
-               2 * np.dot(v, v.T) + 2 * self.w * skew_symmetric(v)
+        # Extract quaternion components
+        w, x, y, z = self.w, self.x, self.y, self.z
+        
+        # Compute rotation matrix directly from quaternion components
+        # This avoids the problematic v.T operation
+        return np.array([
+            [1 - 2*(y*y + z*z), 2*(x*y - w*z), 2*(x*z + w*y)],
+            [2*(x*y + w*z), 1 - 2*(x*x + z*z), 2*(y*z - w*x)],
+            [2*(x*z - w*y), 2*(y*z + w*x), 1 - 2*(x*x + y*y)]
+        ], dtype=np.float64)
 
     def to_euler(self):
         """Return as xyz (roll pitch yaw) Euler angles."""
         roll = np.arctan2(2 * (self.w * self.x + self.y * self.z), 1 - 2 * (self.x**2 + self.y**2))
-        pitch = np.arcsin(2 * (self.w * self.y - self.z * self.x))
+        pitch = np.arcsin(np.clip(2 * (self.w * self.y - self.z * self.x), -1.0, 1.0))
         yaw = np.arctan2(2 * (self.w * self.z + self.x * self.y), 1 - 2 * (self.y**2 + self.z**2))
         return np.array([roll, pitch, yaw])
 
@@ -126,6 +139,8 @@ class Quaternion():
     def normalize(self):
         """Return a (unit) normalized version of this quaternion."""
         norm = np.linalg.norm([self.w, self.x, self.y, self.z])
+        if norm < 1e-8:
+            return Quaternion(1.0, 0.0, 0.0, 0.0)  # Return identity quaternion
         return Quaternion(self.w / norm, self.x / norm, self.y / norm, self.z / norm)
 
     def quat_mult_right(self, q, out='np'):
@@ -137,10 +152,10 @@ class Quaternion():
         :param out: Output type, either np or Quaternion.
         :return: Returns quaternion of desired type.
         """
-        v = np.array([self.x, self.y, self.z]).reshape(3, 1)
+        v = np.array([self.x, self.y, self.z])
         sum_term = np.zeros([4,4])
-        sum_term[0,1:] = -v[:,0]
-        sum_term[1:, 0] = v[:,0]
+        sum_term[0, 1:] = -v
+        sum_term[1:, 0] = v
         sum_term[1:, 1:] = -skew_symmetric(v)
         sigma = self.w * np.eye(4) + sum_term
 
@@ -164,11 +179,11 @@ class Quaternion():
         :param out: Output type, either np or Quaternion.
         :return: Returns quaternion of desired type.
         """
-        v = np.array([self.x, self.y, self.z]).reshape(3, 1)
+        v = np.array([self.x, self.y, self.z])
         sum_term = np.zeros([4,4])
-        sum_term[0,1:] = -v[:,0]
-        sum_term[1:, 0] = v[:,0]
-        sum_term[1:, 1:] = skew_symmetric(v)
+        sum_term[0, 1:] = -v
+        sum_term[1:, 0] = v
+        sum_term[1:, 1:] = skew_symmetric(v)  # Note: positive for left multiplication
         sigma = self.w * np.eye(4) + sum_term
 
         if type(q).__name__ == "Quaternion":
